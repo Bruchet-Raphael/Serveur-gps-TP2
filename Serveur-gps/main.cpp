@@ -2,15 +2,29 @@
 #include <QSerialPort>
 #include <QDateTime>
 #include <QDebug>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QSqlError>
 
 // Convertit "ddmm.mm" en degrés décimaux
 double nmeaToDecimal(const QString& degMin) {
     bool ok = false;
     double val = degMin.toDouble(&ok);
-    if (!ok) return 0.0;
+    if (!ok || val == 0.0) return 0.0;
     int deg = int(val / 100);
     double min = val - deg * 100;
     return deg + min / 60.0;
+}
+
+// Nettoie une chaîne NMEA
+QString cleanNmeaField(const QString& field) {
+    QString cleaned;
+    for (QChar c : field) {
+        if (c.isDigit() || c == '.') {
+            cleaned.append(c);
+        }
+    }
+    return cleaned.trimmed();
 }
 
 // Parse une trame GPGLL
@@ -24,11 +38,11 @@ bool parseGpgll(const QByteArray& line, double& latitude, double& longitude, QDa
     QStringList parts = QString::fromUtf8(core).split(',', Qt::KeepEmptyParts);
     if (parts.size() < 7) return false;
 
-    QString latStr = parts[1];
+    QString latStr = cleanNmeaField(parts[1]);
     QChar latDir = parts[2].isEmpty() ? QChar() : parts[2].at(0);
-    QString lonStr = parts[3];
+    QString lonStr = cleanNmeaField(parts[3]);
     QChar lonDir = parts[4].isEmpty() ? QChar() : parts[4].at(0);
-    QString timeStr = parts[5];
+    QString timeStr = cleanNmeaField(parts[5]);
     QChar status = parts[6].isEmpty() ? QChar() : parts[6].at(0);
 
     if (status != 'A') return false;
@@ -39,12 +53,16 @@ bool parseGpgll(const QByteArray& line, double& latitude, double& longitude, QDa
     longitude = nmeaToDecimal(lonStr);
     if (lonDir == 'W') longitude = -longitude;
 
-    if (timeStr.length() != 6) return false;
-    int h = timeStr.mid(0, 2).toInt();
-    int m = timeStr.mid(2, 2).toInt();
-    int s = timeStr.mid(4, 2).toInt();
-    timestamp = QDateTime::currentDateTimeUtc();
-    timestamp.setTime(QTime(h, m, s));
+    if (timeStr.length() == 6) {
+        int h = timeStr.mid(0, 2).toInt();
+        int m = timeStr.mid(2, 2).toInt();
+        int s = timeStr.mid(4, 2).toInt();
+        timestamp = QDateTime::currentDateTimeUtc();
+        timestamp.setTime(QTime(h, m, s));
+    }
+    else {
+        timestamp = QDateTime::currentDateTimeUtc();
+    }
 
     return true;
 }
@@ -52,12 +70,25 @@ bool parseGpgll(const QByteArray& line, double& latitude, double& longitude, QDa
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 
+    // Connexion à MariaDB
+    QSqlDatabase db = QSqlDatabase::addDatabase("QMYSQL");
+    db.setHostName("");
+    db.setPort(3306);
+    db.setDatabaseName("");
+    db.setUserName("");
+    db.setPassword("");
+
+    if (!db.open()) {
+        qCritical() << "Erreur DB:" << db.lastError().text();
+        return 1;
+    }
+
     // Port série
     QSerialPort port;
-    port.setPortName("COM3");
+    port.setPortName("COM4");
     port.setBaudRate(4800);
     if (!port.open(QIODevice::ReadOnly)) {
-        qCritical() << "Erreur port serie:" << port.errorString();
+        qCritical() << "Erreur port série:" << port.errorString();
         return 1;
     }
 
@@ -74,10 +105,21 @@ int main(int argc, char* argv[]) {
             QDateTime dt;
 
             if (parseGpgll(line, lat, lon, dt)) {
-                qDebug() << "Coordonnees recues:"
-                    << "Latitude:" << lat
-                    << "Longitude:" << lon
-                    << "Heure UTC:" << dt.toString("yyyy-MM-dd HH:mm:ss");
+                QSqlQuery q;
+                q.prepare("INSERT INTO GPS (latitude, longitude, Date) VALUES (?, ?, ?)");
+                q.addBindValue(lat*100);
+                q.addBindValue(lon*100);
+                q.addBindValue(dt.toString("yyyy-MM-dd HH:mm:ss"));
+
+                if (!q.exec()) {
+                    qWarning() << "Erreur insertion:" << q.lastError().text();
+                }
+                else {
+                    qDebug() << "Coordonnees inserees en BDD:"
+                        << "Latitude:" << lat*100
+                        << "Longitude:" << lon*100
+                        << "Heure UTC:" << dt.toString("yyyy-MM-dd HH:mm:ss");
+                }
             }
         }
         });
