@@ -5,6 +5,7 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
+#include <thread>
 
 // Convertit "ddmm.mm" en degrés décimaux
 double nmeaToDecimal(const QString& degMin) {
@@ -67,62 +68,92 @@ bool parseGpgll(const QByteArray& line, double& latitude, double& longitude, QDa
     return true;
 }
 
-int main(int argc, char* argv[]) {
-    QCoreApplication app(argc, argv);
-
-    // Connexion à MariaDB
-    QSqlDatabase db = QSqlDatabase::addDatabase("QMYSQL");
-    db.setHostName("");
-    db.setPort(3306);
-    db.setDatabaseName("");
-    db.setUserName("");
-    db.setPassword("");
-
+void bddconect(QSqlDatabase &db)
+{
+    
     if (!db.open()) {
         qCritical() << "Erreur DB:" << db.lastError().text();
-        return 1;
     }
+    else {
+        qDebug("Connecter a la bdd");
+    }
+}
 
-    // Port série
-    QSerialPort port;
-    port.setPortName("COM4");
+void portconnect(QSerialPort &port)
+{
+    port.setPortName("COM5");
     port.setBaudRate(4800);
     if (!port.open(QIODevice::ReadOnly)) {
-        qCritical() << "Erreur port série:" << port.errorString();
-        return 1;
+        qCritical() << "Erreur port serie:" << port.errorString();
     }
+    else {
+        qDebug("Connecter au port serie");
+    }
+}
 
-    QObject::connect(&port, &QSerialPort::readyRead, [&]() {
-        static QByteArray buffer;
-        buffer.append(port.readAll());
+int main(int argc, char* argv[]) {
+    QCoreApplication app(argc, argv);
+    QSqlDatabase db = QSqlDatabase::addDatabase("QMYSQL");
+    QSerialPort port;
 
-        int idx;
-        while ((idx = buffer.indexOf('\n')) != -1) {
-            QByteArray line = buffer.left(idx).trimmed();
-            buffer.remove(0, idx + 1);
+        while (!db.isOpen()||!port.isOpen())
+        {
+            if (!db.isOpen())
+            {
+                qDebug("connexion a la bdd");
+                bddconect(db);
+            }
 
-            double lat = 0.0, lon = 0.0;
-            QDateTime dt;
-
-            if (parseGpgll(line, lat, lon, dt)) {
-                QSqlQuery q;
-                q.prepare("INSERT INTO GPS (latitude, longitude, Date) VALUES (?, ?, ?)");
-                q.addBindValue(lat*100);
-                q.addBindValue(lon*100);
-                q.addBindValue(dt.toString("yyyy-MM-dd HH:mm:ss"));
-
-                if (!q.exec()) {
-                    qWarning() << "Erreur insertion:" << q.lastError().text();
-                }
-                else {
-                    qDebug() << "Coordonnees inserees en BDD:"
-                        << "Latitude:" << lat*100
-                        << "Longitude:" << lon*100
-                        << "Heure UTC:" << dt.toString("yyyy-MM-dd HH:mm:ss");
-                }
+            if (!port.isOpen())
+            {
+                qDebug("Connection au port serie");
+                portconnect(port);
             }
         }
-        });
+            
+            QObject::connect(&port, &QSerialPort::readyRead, [&]() {
+                static QByteArray buffer;
+                buffer.append(port.readAll());
+                int idx;
+                while ((idx = buffer.indexOf('\n')) != -1) {
+                    if (!db.isOpen())
+                    {
+                        qDebug("connexion a la bdd");
+                        bddconect(db);
+                    }
 
+                    if (!port.isOpen())
+                    {
+                        qDebug("Connection au port serie");
+                        portconnect(port);
+                    }
+
+                    QByteArray line = buffer.left(idx).trimmed();
+                    buffer.remove(0, idx + 1);
+
+                    double lat = 0.0, lon = 0.0;
+                    QDateTime dt;
+
+                    if (parseGpgll(line, lat, lon, dt)) {
+                        QSqlQuery q;
+                        q.prepare("INSERT INTO GPS (latitude, longitude, Date) VALUES (?, ?, ?)");
+                        q.addBindValue(lat * 100);
+                        q.addBindValue(lon * 100);
+                        q.addBindValue(dt.toString("yyyy-MM-dd HH:mm:ss"));
+
+                        if (!q.exec()) {
+                            qWarning() << "Erreur insertion:" << q.lastError().text();
+                        }
+                        else {
+                            qDebug() << "Coordonnees inserees en BDD:"
+                                << "Latitude:" << lat * 100
+                                << "Longitude:" << lon * 100
+                                << "Heure UTC:" << dt.toString("yyyy-MM-dd HH:mm:ss");
+                        }
+                    }
+                }
+                });
+    
     return app.exec();
+    
 }
