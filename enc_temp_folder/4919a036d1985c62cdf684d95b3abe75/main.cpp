@@ -68,11 +68,11 @@ bool parseGpgga(const QByteArray& line, double& latitude, double& longitude) {
 
 // Connexion à la base de données
 void bddconect(QSqlDatabase& db) {
-    db.setHostName("");
+    db.setHostName("172.29.19.33");
     db.setPort(3306);
-    db.setDatabaseName("");
-    db.setUserName("");
-    db.setPassword("");
+    db.setDatabaseName("TpProjet2");
+    db.setUserName("BDDGPhess");
+    db.setPassword("t(vj-sA2@sIhnlCB");
     if (!db.open()) {
         qCritical() << "Erreur DB:" << db.lastError().text();
     }
